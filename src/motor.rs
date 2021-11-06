@@ -264,17 +264,17 @@ impl Motor
         let vol_d: f32;
         unsafe {
             ERR_D_INT += err_d;
-            vol_d = 0.5 * err_d;// + 0.0001 * ERR_D_INT;
+            vol_d = 1.0 * err_d + 0.00001 * ERR_D_INT;
         }
 
 
-        let ref_curr_q: f32 = 1.5;
+        let ref_curr_q: f32 = 0.5;
 
         let err_q: f32 = ref_curr_q - curr_q;
         let vol_q: f32;
         unsafe {
             ERR_Q_INT += err_q;
-            vol_q = 0.5 * err_q;// + 0.0001 * ERR_Q_INT;
+            vol_q = 1.0 * err_q + 0.00001 * ERR_Q_INT;
         }
 
 

@@ -9,13 +9,7 @@ use embedded_hal::spi::MODE_1;
 
 use stm32f4xx_hal as hal;
 use hal::{
-    adc::{
-        config::Scan,
-        config::Clock,
-        config::Resolution,
-        config::Align,
-        config::Continuous,
-    },
+    adc::config::{Align, Clock, Continuous, Resolution, Scan},
     gpio::{gpioa, Output, PushPull, gpioc::{PC10, PC11, PC12}, Alternate},
     pac,
     pac::{ADC1, ADC_COMMON, interrupt, Interrupt, TIM1, TIM2},
