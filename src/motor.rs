@@ -45,16 +45,21 @@ pub struct Motor
     ch1: PwmChannels<TIM1, C1>,
     ch2: PwmChannels<TIM1, C2>,
     ch3: PwmChannels<TIM1, C3>,
+    pole_pairs: u16,
+    enc_resolution: u16,
     pub max_duty: u16,
 }
 
 impl Motor
 {
-    pub fn new(ch1: PwmChannels<TIM1, C1>, ch2: PwmChannels<TIM1, C2>, ch3: PwmChannels<TIM1, C3>) -> Motor {
+    pub fn new(ch1: PwmChannels<TIM1, C1>, ch2: PwmChannels<TIM1, C2>, ch3: PwmChannels<TIM1, C3>, pole_pairs: u16, enc_resolution: u16) -> Motor {
         let max_duty = ch1.get_max_duty();
 
         Motor{ 
-            ch1, ch2, ch3, max_duty,
+            ch1, ch2, ch3,
+            pole_pairs,
+            enc_resolution,
+            max_duty,
         }
     }
 
@@ -247,12 +252,18 @@ impl Motor
         self.set_duty(pwm_duty_a, pwm_duty_b, pwm_duty_c)
     }
 
-    pub fn drive_foc(&mut self, angle: u16, curr_a: f32, curr_b: f32, curr_c: f32) -> Result<(), ()>
+    pub fn drive_foc(&mut self, angle: u16, curr_a: f32, curr_b: f32, curr_c: f32, ref_curr_d: f32, ref_curr_q: f32) -> Result<(), ()>
     {
-        let curr_alpha: f32 = 0.81694965496580928 * (curr_a - 0.5 * (curr_b + curr_c)); 
-        let curr_beta: f32 = 0.7071067811866 * (curr_b - curr_c);
+        const PI: f32 = 3.1415926353;
+        const CURR_D_PGAIN: f32 = 0.1;
+        const CURR_D_IGAIN: f32 = 0.0000001;
+        const CURR_Q_PGAIN: f32 = 1.5;
+        const CURR_Q_IGAIN: f32 = 0.0000001;
 
-        let th_dc: f32  = 2.0 * 3.1415926353 * angle as f32 / (16384.0/12.0);
+        let curr_alpha: f32 = libm::sqrtf(2.0/3.0) * (curr_a - 0.5 * (curr_b + curr_c)); 
+        let curr_beta: f32 =  (curr_b - curr_c) / libm::sqrtf(2.0);
+
+        let th_dc: f32  = 2.0 * PI * angle as f32 / (self.enc_resolution as f32 / self.pole_pairs as f32);
         let sin0: f32 = libm::sinf(th_dc);
         let cos0: f32  = libm::cosf(th_dc);
 
@@ -260,23 +271,19 @@ impl Motor
         let curr_d: f32 = curr_alpha * cos0 + curr_beta * sin0;
         let curr_q: f32 = -curr_alpha * sin0 + curr_beta * cos0;
 
-        let err_d: f32 = 0.0 - curr_d;
-        let vol_d: f32;
+        let err_d: f32 = ref_curr_d - curr_d;
+        let mut vol_d: f32 = 0.0;
         unsafe {
             ERR_D_INT += err_d;
-            vol_d = 1.0 * err_d + 0.00001 * ERR_D_INT;
+            vol_d = CURR_D_PGAIN * err_d + CURR_D_IGAIN * ERR_D_INT;
         }
-
-
-        let ref_curr_q: f32 = 0.5;
 
         let err_q: f32 = ref_curr_q - curr_q;
-        let vol_q: f32;
+        let mut vol_q: f32 = 0.0;
         unsafe {
             ERR_Q_INT += err_q;
-            vol_q = 1.0 * err_q + 0.00001 * ERR_Q_INT;
+            vol_q = CURR_Q_PGAIN * err_q + CURR_Q_IGAIN * ERR_Q_INT;
         }
-
 
         // ref
         //let vol_d: f32 = 0.0;
@@ -287,9 +294,9 @@ impl Motor
         let vol_beta: f32 = vol_d * sin0 + vol_q * cos0;
 
         // αβ -> abc
-        let mut vol_a: f32 = 0.81649658 * vol_alpha;
-        let mut vol_b: f32 = -0.40824829 * vol_alpha + 0.7071067891 * vol_beta;
-        let mut vol_c: f32 = -0.40824829 * vol_alpha - 0.7071067891 * vol_beta;
+        let mut vol_a: f32 = libm::sqrtf(2.0/3.0) * vol_alpha;
+        let mut vol_b: f32 = -vol_alpha / libm::sqrtf(6.0) + vol_beta / libm::sqrtf(2.0);
+        let mut vol_c: f32 = -vol_alpha / libm::sqrtf(6.0) - vol_beta / libm::sqrtf(2.0);
 
         vol_a = 1.0 - (vol_a + 12.0)/24.0;
         if vol_a > 1.0 { vol_a = 1.0; }

@@ -50,6 +50,23 @@ static mut CURRENT_A: f32 = 0.0;
 static mut CURRENT_B: f32 = 0.0;
 static mut CURRENT_C: f32 = 0.0;
 
+static mut MOT_ANGLE: u16 = 0;
+static mut MOT_ANGLE_OLD: u16 = 0;
+static mut MOT_VELOCITY: f32 = 0.0;
+static mut MOT_VELOCITY_OLD: f32 = 0.0;
+static mut ERR_VELOCITY_INT: f32 = 0.0;
+
+static mut REF_CURR_D: f32 = 0.0;
+static mut REF_CURR_Q: f32 = 0.0;
+
+// System
+const TIM2_FREQ_KHZ: u32 = 10;
+// Motor
+const MOT_POLE_PAIRS: u16 = 12;
+// Encoder
+const ENC_RESOLUTION: u16 = 16384;
+
+
 
 #[interrupt]
 fn ADC() {
@@ -60,11 +77,13 @@ fn ADC() {
         let device = pac::Peripherals::steal();
         device.ADC1.sr.modify(|_, w| w.jeoc().clear_bit());
 
-        let sample = device.ADC1.jdr1.read().jdata().bits();
-        let so1 = ( ( (u32::from(sample) + 48u32) * VDDA_CALIB ) / max_sample) as u16;
+        let jdr1_data = device.ADC1.jdr1.read().jdata().bits();
+        let jdr1_offset = 48u32;
+        let so1 = ( ( (u32::from(jdr1_data) + jdr1_offset) * VDDA_CALIB ) / max_sample) as u16;
 
-        let sample = device.ADC1.jdr2.read().jdata().bits();
-        let so2 = ( ( (u32::from(sample) + 118u32) * VDDA_CALIB ) / max_sample) as u16;
+        let jdr2_data = device.ADC1.jdr2.read().jdata().bits();
+        let jdr2_offset = 118u32;
+        let so2 = ( ( (u32::from(jdr2_data) + jdr2_offset) * VDDA_CALIB ) / max_sample) as u16;
 
         CURRENT_B = (so1 as f32 - 1650.0) / 200.0;
         CURRENT_C = (so2 as f32 - 1650.0) / 200.0;
@@ -83,7 +102,6 @@ fn ADC() {
 
 #[interrupt]
 fn TIM2() {
-
     cortex_m::interrupt::free(|cs| {
         if let Some(ref mut tim) = G_TIM.borrow(cs).borrow_mut().as_mut() {
             let _ = tim.wait();
@@ -105,10 +123,11 @@ fn TIM2() {
         let mut as5048: TypeEncoder = AS5048A::new(&mut spi3, ncs);
 
         // AS5048A
-        let angle = as5048.angle().unwrap();
-        let offset = 650u16;
-        let angle_hosei = (angle - offset) % 16384u16;
-        let electric_angle = angle_hosei % (16384/12u16);
+        let measured_angle = as5048.angle().unwrap();
+        let angle_offset = 650u16;
+
+        MOT_ANGLE = (measured_angle - angle_offset) % ENC_RESOLUTION;
+        let electric_angle = MOT_ANGLE % (ENC_RESOLUTION/MOT_POLE_PAIRS);
 
         let motor = MOTOR.get_or_insert_with(|| {
             cortex_m::interrupt::free(|cs| {
@@ -116,11 +135,37 @@ fn TIM2() {
             })
         });
 
+        // Velocity control
+        let ref_velocity: f32 = 100.0;
+        
+        let res_velocity = 
+            if (ENC_RESOLUTION-1000) < MOT_ANGLE_OLD  &&  MOT_ANGLE < 1000 {
+                ( MOT_ANGLE as f32 - MOT_ANGLE_OLD as f32 + ENC_RESOLUTION as f32 ) * TIM2_FREQ_KHZ as f32
+
+            } else if MOT_ANGLE_OLD < 1000 && MOT_ANGLE > (ENC_RESOLUTION-1000) {
+                ( MOT_ANGLE as f32 - MOT_ANGLE_OLD as f32 - ENC_RESOLUTION as f32 ) * TIM2_FREQ_KHZ as f32
+            } else {
+                ( MOT_ANGLE as f32 - MOT_ANGLE_OLD as f32 ) * TIM2_FREQ_KHZ as f32
+            };
+
+        let alpha = 0.1;
+        MOT_VELOCITY = alpha * res_velocity + (1.0 - alpha) * MOT_VELOCITY_OLD;
+
+        let err_velocity: f32 = ref_velocity - MOT_VELOCITY;
+        ERR_VELOCITY_INT += err_velocity;
+
+        REF_CURR_D = 0.0;
+        REF_CURR_Q = 0.003 * err_velocity + 0.000000003 * ERR_VELOCITY_INT;
+
+        MOT_ANGLE_OLD = MOT_ANGLE;
+        MOT_VELOCITY_OLD = MOT_VELOCITY;
+        
+
         // select control mode
         //motor.drive_profile().unwrap();
         //motor.drive_sixstep().unwrap();
         //motor.drive_anglebased_sixstep(electric_angle).unwrap();
-        motor.drive_foc(electric_angle, CURRENT_A, CURRENT_B, CURRENT_C).unwrap();
+        motor.drive_foc(electric_angle, CURRENT_A, CURRENT_B, CURRENT_C, REF_CURR_D, REF_CURR_Q).unwrap();
     }
 
     /*
@@ -208,7 +253,7 @@ fn main() -> ! {
     delay.delay_ms(1u32);
 
     // Motor
-    let mut motor = Motor::new(ch1, ch2, ch3);
+    let mut motor = Motor::new(ch1, ch2, ch3, MOT_POLE_PAIRS, ENC_RESOLUTION);
     motor.set_duty(0,0,0).unwrap();
     motor.enable().unwrap();
     delay.delay_ms(1u32);
@@ -245,7 +290,7 @@ fn main() -> ! {
         adcc_regb.ccr.modify(|_, w| w.adcpre().bits(Clock::Pclk2_div_2.into()));
 
         // Config regular conversion
-        adc1_regb.cr1.modify(|_, w| w.res().bits(Resolution::Twelve.into()));   //12bit
+        adc1_regb.cr1.modify(|_, w| w.res().bits(Resolution::Twelve.into()));
         adc1_regb.cr1.modify(|_, w| w.scan().bit(Scan::Enabled.into()));
         adc1_regb.cr2.modify(|_, w| w.align().bit(Align::Right.into()));
         adc1_regb.cr2.modify(|_, w| w.cont().bit(Continuous::Single.into()));
@@ -276,7 +321,7 @@ fn main() -> ! {
     */
 
     // TIM2 Interrupt
-    let mut timer = Timer::tim2(dp.TIM2, 5000.hz(), clocks);
+    let mut timer = Timer::tim2(dp.TIM2, TIM2_FREQ_KHZ.khz(), clocks);
     timer.listen(Event::TimeOut);
     cortex_m::interrupt::free(|cs| *G_TIM.borrow(cs).borrow_mut() = Some(timer));
     //enable TIM2 interrupt
