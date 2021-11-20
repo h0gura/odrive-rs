@@ -25,7 +25,6 @@ extern crate drv8301;
 use drv8301::drv8301::Drv8301;
 use odrive_rs::as5048a::AS5048A;
 use odrive_rs::motor::Motor;
-
 use odrive_rs::rcc::{Enable, Reset};
 
 use cortex_m_semihosting::{hprint, hprintln};
@@ -54,6 +53,7 @@ static mut MOT_ANGLE: u16 = 0;
 static mut MOT_ANGLE_OLD: u16 = 0;
 static mut MOT_VELOCITY: f32 = 0.0;
 static mut MOT_VELOCITY_OLD: f32 = 0.0;
+static mut ERR_VELOCITY: f32 = 0.0;
 static mut ERR_VELOCITY_INT: f32 = 0.0;
 
 static mut REF_CURR_D: f32 = 0.0;
@@ -136,8 +136,10 @@ fn TIM2() {
         });
 
         // Velocity control
-        let ref_velocity: f32 = 100.0;
-        
+        const REF_VELOCITY: f32 = - 100.0;
+        const VELLOCITY_PGAIN: f32 = 0.1;
+        const VELOCITY_IGAIN: f32 = 0.00001;
+
         let res_velocity = 
             if (ENC_RESOLUTION-1000) < MOT_ANGLE_OLD  &&  MOT_ANGLE < 1000 {
                 ( MOT_ANGLE as f32 - MOT_ANGLE_OLD as f32 + ENC_RESOLUTION as f32 ) * TIM2_FREQ_KHZ as f32
@@ -151,11 +153,12 @@ fn TIM2() {
         let alpha = 0.1;
         MOT_VELOCITY = alpha * res_velocity + (1.0 - alpha) * MOT_VELOCITY_OLD;
 
-        let err_velocity: f32 = ref_velocity - MOT_VELOCITY;
-        ERR_VELOCITY_INT += err_velocity;
+        ERR_VELOCITY = MOT_VELOCITY - REF_VELOCITY;
+        ERR_VELOCITY_INT += ERR_VELOCITY;
 
         REF_CURR_D = 0.0;
-        REF_CURR_Q = 0.003 * err_velocity + 0.000000003 * ERR_VELOCITY_INT;
+        REF_CURR_Q = VELLOCITY_PGAIN * ERR_VELOCITY + VELOCITY_IGAIN * ERR_VELOCITY_INT;
+        REF_CURR_Q = -1.0 * REF_CURR_Q;
 
         MOT_ANGLE_OLD = MOT_ANGLE;
         MOT_VELOCITY_OLD = MOT_VELOCITY;

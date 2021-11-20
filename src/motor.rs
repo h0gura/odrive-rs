@@ -36,7 +36,11 @@ enum Step {
 }
 static mut STEP: Step = Step::Step1AtoB;
 
+static mut CURR_D: f32 = 0.0; 
+static mut ERR_D: f32 = 0.0;
 static mut ERR_D_INT: f32 = 0.0;
+static mut CURR_Q: f32 = 0.0;
+static mut ERR_Q: f32 = 0.0;
 static mut ERR_Q_INT: f32 = 0.0;
 
 
@@ -255,10 +259,10 @@ impl Motor
     pub fn drive_foc(&mut self, angle: u16, curr_a: f32, curr_b: f32, curr_c: f32, ref_curr_d: f32, ref_curr_q: f32) -> Result<(), ()>
     {
         const PI: f32 = 3.1415926353;
-        const CURR_D_PGAIN: f32 = 0.1;
-        const CURR_D_IGAIN: f32 = 0.0000001;
-        const CURR_Q_PGAIN: f32 = 1.5;
-        const CURR_Q_IGAIN: f32 = 0.0000001;
+        const CURR_D_PGAIN: f32 = 1.0;
+        const CURR_D_IGAIN: f32 = 0.0001;
+        const CURR_Q_PGAIN: f32 = 3.0;
+        const CURR_Q_IGAIN: f32 = 0.1;
 
         let curr_alpha: f32 = libm::sqrtf(2.0/3.0) * (curr_a - 0.5 * (curr_b + curr_c)); 
         let curr_beta: f32 =  (curr_b - curr_c) / libm::sqrtf(2.0);
@@ -268,21 +272,19 @@ impl Motor
         let cos0: f32  = libm::cosf(th_dc);
 
         //αβ -> dq
-        let curr_d: f32 = curr_alpha * cos0 + curr_beta * sin0;
-        let curr_q: f32 = -curr_alpha * sin0 + curr_beta * cos0;
-
-        let err_d: f32 = ref_curr_d - curr_d;
         let mut vol_d: f32 = 0.0;
-        unsafe {
-            ERR_D_INT += err_d;
-            vol_d = CURR_D_PGAIN * err_d + CURR_D_IGAIN * ERR_D_INT;
-        }
-
-        let err_q: f32 = ref_curr_q - curr_q;
         let mut vol_q: f32 = 0.0;
         unsafe {
-            ERR_Q_INT += err_q;
-            vol_q = CURR_Q_PGAIN * err_q + CURR_Q_IGAIN * ERR_Q_INT;
+            CURR_D = curr_alpha * cos0 + curr_beta * sin0;
+            CURR_Q = -curr_alpha * sin0 + curr_beta * cos0;
+
+            ERR_D = CURR_D - ref_curr_d;
+            ERR_D_INT += ERR_D;
+            vol_d = CURR_D_PGAIN * ERR_D + CURR_D_IGAIN * ERR_D_INT;
+
+            ERR_Q =  CURR_Q - ref_curr_q;
+            ERR_Q_INT += ERR_Q;
+            vol_q = CURR_Q_PGAIN * ERR_Q + CURR_Q_IGAIN * ERR_Q_INT;
         }
 
         // ref
